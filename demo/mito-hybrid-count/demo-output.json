@@ -1,0 +1,268 @@
+[
+  {
+    "append_mode": true,
+    "baseline_count": 21,
+    "case": "mixed",
+    "hybrid_count": 21,
+    "metadata_files": 1,
+    "metadata_files_not_opened": true,
+    "metadata_rows": 10,
+    "query": "COUNT(*) WHERE ts >= 0 AND ts < 15000 (milliseconds)",
+    "scanned_files": 2,
+    "scanned_rows": 11,
+    "sources": [
+      {
+        "action": "metadata",
+        "file_id": "5299989643265(1234, 1)/78ea60dc-ce01-4c4a-aa50-848bdd2319b7",
+        "metadata_rows": 10,
+        "precision": "Exact",
+        "reason": "all_file_rows_match",
+        "source": "sst",
+        "time_range_ms": [
+          0,
+          9000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/8a1b7854-723d-44f3-8d4a-cfec5ab392ea",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "missing_row_count",
+        "source": "sst",
+        "time_range_ms": [
+          2000,
+          4000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/a11b8f9d-d381-41a5-81fa-4fe0b7011a2f",
+        "metadata_rows": 10,
+        "precision": "Inexact",
+        "reason": "partial_time_overlap",
+        "source": "sst",
+        "time_range_ms": [
+          10000,
+          19000
+        ]
+      },
+      {
+        "action": "scan",
+        "physical_rows": 3,
+        "precision": "Absent",
+        "reason": "memtable_fallback",
+        "source": "memtable_range"
+      }
+    ],
+    "time_pruned_files": 1,
+    "verified_equal": true
+  },
+  {
+    "append_mode": true,
+    "baseline_count": 21,
+    "case": "all_unknown",
+    "hybrid_count": 21,
+    "metadata_files": 0,
+    "metadata_files_not_opened": true,
+    "metadata_rows": 0,
+    "query": "COUNT(*) WHERE ts >= 0 AND ts < 15000 (milliseconds)",
+    "scanned_files": 3,
+    "scanned_rows": 21,
+    "sources": [
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/78ea60dc-ce01-4c4a-aa50-848bdd2319b7",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "missing_row_count",
+        "source": "sst",
+        "time_range_ms": [
+          0,
+          9000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/8a1b7854-723d-44f3-8d4a-cfec5ab392ea",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "missing_row_count",
+        "source": "sst",
+        "time_range_ms": [
+          2000,
+          4000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/a11b8f9d-d381-41a5-81fa-4fe0b7011a2f",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "missing_row_count",
+        "source": "sst",
+        "time_range_ms": [
+          10000,
+          19000
+        ]
+      },
+      {
+        "action": "scan",
+        "physical_rows": 3,
+        "precision": "Absent",
+        "reason": "memtable_fallback",
+        "source": "memtable_range"
+      }
+    ],
+    "time_pruned_files": 1,
+    "verified_equal": true
+  },
+  {
+    "append_mode": true,
+    "baseline_count": 0,
+    "case": "empty",
+    "hybrid_count": 0,
+    "metadata_files": 0,
+    "metadata_files_not_opened": true,
+    "metadata_rows": 0,
+    "query": "COUNT(*) WHERE ts >= 40000 AND ts < 50000 (milliseconds)",
+    "scanned_files": 0,
+    "scanned_rows": 0,
+    "sources": [],
+    "time_pruned_files": 4,
+    "verified_equal": true
+  },
+  {
+    "append_mode": false,
+    "baseline_count": 15,
+    "case": "mixed",
+    "hybrid_count": 15,
+    "metadata_files": 0,
+    "metadata_files_not_opened": true,
+    "metadata_rows": 0,
+    "query": "COUNT(*) WHERE ts >= 0 AND ts < 15000 (milliseconds)",
+    "scanned_files": 3,
+    "scanned_rows": 15,
+    "sources": [
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/16888c2d-1c46-4678-86a2-56e57a6f26af",
+        "metadata_rows": 10,
+        "precision": "Absent",
+        "reason": "visible_rows_not_proven",
+        "source": "sst",
+        "time_range_ms": [
+          0,
+          9000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/874694bc-2696-427a-93ce-115e3c9d4fe6",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "visible_rows_not_proven",
+        "source": "sst",
+        "time_range_ms": [
+          2000,
+          4000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/4894b964-cea4-4bf3-a59f-f26809c5a635",
+        "metadata_rows": 10,
+        "precision": "Absent",
+        "reason": "visible_rows_not_proven",
+        "source": "sst",
+        "time_range_ms": [
+          10000,
+          19000
+        ]
+      },
+      {
+        "action": "scan",
+        "physical_rows": 3,
+        "precision": "Absent",
+        "reason": "memtable_fallback",
+        "source": "memtable_range"
+      }
+    ],
+    "time_pruned_files": 1,
+    "verified_equal": true
+  },
+  {
+    "append_mode": false,
+    "baseline_count": 15,
+    "case": "all_unknown",
+    "hybrid_count": 15,
+    "metadata_files": 0,
+    "metadata_files_not_opened": true,
+    "metadata_rows": 0,
+    "query": "COUNT(*) WHERE ts >= 0 AND ts < 15000 (milliseconds)",
+    "scanned_files": 3,
+    "scanned_rows": 15,
+    "sources": [
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/16888c2d-1c46-4678-86a2-56e57a6f26af",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "visible_rows_not_proven",
+        "source": "sst",
+        "time_range_ms": [
+          0,
+          9000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/874694bc-2696-427a-93ce-115e3c9d4fe6",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "visible_rows_not_proven",
+        "source": "sst",
+        "time_range_ms": [
+          2000,
+          4000
+        ]
+      },
+      {
+        "action": "scan",
+        "file_id": "5299989643265(1234, 1)/4894b964-cea4-4bf3-a59f-f26809c5a635",
+        "metadata_rows": null,
+        "precision": "Absent",
+        "reason": "visible_rows_not_proven",
+        "source": "sst",
+        "time_range_ms": [
+          10000,
+          19000
+        ]
+      },
+      {
+        "action": "scan",
+        "physical_rows": 3,
+        "precision": "Absent",
+        "reason": "memtable_fallback",
+        "source": "memtable_range"
+      }
+    ],
+    "time_pruned_files": 1,
+    "verified_equal": true
+  },
+  {
+    "append_mode": false,
+    "baseline_count": 0,
+    "case": "empty",
+    "hybrid_count": 0,
+    "metadata_files": 0,
+    "metadata_files_not_opened": true,
+    "metadata_rows": 0,
+    "query": "COUNT(*) WHERE ts >= 40000 AND ts < 50000 (milliseconds)",
+    "scanned_files": 0,
+    "scanned_rows": 0,
+    "sources": [],
+    "time_pruned_files": 4,
+    "verified_equal": true
+  }
+]

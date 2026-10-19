@@ -14,6 +14,9 @@
 
 //! Scans a region according to the scan request.
 
+#[cfg(test)]
+mod hybrid_count_demo;
+
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::num::NonZeroU64;
