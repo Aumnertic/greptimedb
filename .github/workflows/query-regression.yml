@@ -736,6 +736,7 @@ jobs:
           cargo build --profile "${CARGO_PROFILE}" -p cmd --bin greptime
           cargo build --profile "${CARGO_PROFILE}" -p cmd --bin query_perf_fixture --features dev-tools
           cargo build --profile "${CARGO_PROFILE}" -p cmd --bin query_regression_runner --features dev-tools
+          cargo build --profile "${CARGO_PROFILE}" -p cmd --bin analyze_metadata_count_eligibility --features dev-tools
           candidate_build_elapsed="${SECONDS}"
           printf 'Candidate greptime and query regression helper cargo builds elapsed: %s seconds\n' "${candidate_build_elapsed}"
           printf -- '- Candidate greptime and query regression helper cargo builds: %s seconds\n' "${candidate_build_elapsed}" >> "${GITHUB_STEP_SUMMARY}"
@@ -751,6 +752,8 @@ jobs:
             "${GITHUB_WORKSPACE}/query-regression-bins/candidate/query_perf_fixture"
           cp "${CARGO_TARGET_DIR}/${target_dir}/query_regression_runner" \
             "${GITHUB_WORKSPACE}/query-regression-bins/candidate/query_regression_runner"
+          cp "${CARGO_TARGET_DIR}/${target_dir}/analyze_metadata_count_eligibility" \
+            "${GITHUB_WORKSPACE}/query-regression-bins/candidate/analyze_metadata_count_eligibility"
 
       - name: Run query regression
         id: run
@@ -772,6 +775,14 @@ jobs:
           --candidate-src src
           --summary-script "${SUMMARY_SCRIPT}"
 
+      - name: Analyze remote-write manifest counts
+        if: ${{ always() && steps.run.outcome != 'skipped' }}
+        run: >-
+          uv run --no-project python src/.github/scripts/analyze_metadata_count_workload.py
+          --work-dir query-regression-work
+          --cases-root src/tests/perf/query_cases
+          --analyzer query-regression-bins/candidate/analyze_metadata_count_eligibility
+
       - name: Write PR metadata for trusted comment workflow
         if: ${{ always() && env.PR_ADMISSION == 'true' }}
         env:
@@ -787,6 +798,7 @@ jobs:
           name: query-regression-report
           path: |
             query-regression-work/**/query-regression-report.json
+            query-regression-work/**/metadata_count_analysis_report.txt
             query-regression-work/**/base/report.json
             query-regression-work/**/candidate/report.json
             query-regression-work/**/logs/**

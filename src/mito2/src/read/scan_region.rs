@@ -15,6 +15,7 @@
 //! Scans a region according to the scan request.
 
 mod count;
+pub(crate) use count::StatisticsSplitPlan;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -639,6 +640,9 @@ impl ScanRegion {
         if self.experimental_metadata_count && self.request.metadata_count_hint {
             input.exact_num_rows = count::prepare(&input, &self.request).await;
         }
+        if self.experimental_metadata_count {
+            input.statistics_split = count::statistics_split(&input, &self.request);
+        }
         Ok(input)
     }
 
@@ -922,6 +926,8 @@ fn time_range_covers_file(time_range: Option<&TimestampRange>, file: &FileHandle
 
 /// Common input for different scanners.
 pub struct ScanInput {
+    /// Optional file-level partition prepared against this exact read view.
+    pub(crate) statistics_split: Option<count::StatisticsSplitPlan>,
     /// Count proven against this read view and the complete static predicate.
     pub(crate) exact_num_rows: Option<usize>,
     /// Pinned series-index snapshot and its storage, when configured.
@@ -997,6 +1003,7 @@ pub struct ScanInput {
 
 /// Cached output of scan request analysis: the optional range-cache fingerprint
 /// plus the derived implied time range used by range cache and prefilter.
+#[derive(Clone)]
 struct ScanAnalysis {
     /// `None` when the scan is not eligible for range caching.
     fingerprint: Option<ScanRequestFingerprint>,
@@ -1014,6 +1021,52 @@ pub(crate) struct ScanInputBuilder {
 }
 
 impl ScanInput {
+    /// Shares immutable sources and query settings without opening SST data.
+    pub(crate) fn clone_for_statistics(&self) -> Option<Self> {
+        #[cfg(feature = "enterprise")]
+        if !self.extension_ranges.is_empty() {
+            return None;
+        }
+        Some(Self {
+            statistics_split: None,
+            exact_num_rows: self.exact_num_rows,
+            series_index: self.series_index.clone(),
+            ignore_range_index: self.ignore_range_index,
+            access_layer: self.access_layer.clone(),
+            mapper: self.mapper.clone(),
+            read_cols: self.read_cols.clone(),
+            time_range: self.time_range,
+            scan_analysis: self.scan_analysis.clone(),
+            predicate: self.predicate.clone(),
+            region_partition_expr: self.region_partition_expr.clone(),
+            memtables: self.memtables.clone(),
+            files: self.files.clone(),
+            primary_key_mapper: self.primary_key_mapper.clone(),
+            batch_size: self.batch_size,
+            cache_strategy: self.cache_strategy.clone(),
+            ignore_file_not_found: self.ignore_file_not_found,
+            max_concurrent_scan_files: self.max_concurrent_scan_files,
+            scan_memory_tracker: self.scan_memory_tracker.clone(),
+            inverted_index_appliers: self.inverted_index_appliers.clone(),
+            bloom_filter_index_appliers: self.bloom_filter_index_appliers.clone(),
+            fulltext_index_appliers: self.fulltext_index_appliers.clone(),
+            query_start: self.query_start,
+            append_mode: self.append_mode,
+            filter_deleted: self.filter_deleted,
+            merge_mode: self.merge_mode,
+            series_row_selector: self.series_row_selector,
+            distribution: self.distribution,
+            explain_flat_format: self.explain_flat_format,
+            snapshot_sequence: self.snapshot_sequence,
+            sequence_range: self.sequence_range,
+            compaction: self.compaction,
+            json2_rewrite_targets: self.json2_rewrite_targets.clone(),
+            query_stat_counters: self.query_stat_counters.clone(),
+            #[cfg(feature = "enterprise")]
+            extension_ranges: Vec::new(),
+        })
+    }
+
     /// Creates a new [ScanInputBuilder].
     #[must_use]
     pub(crate) fn builder(
@@ -1022,6 +1075,7 @@ impl ScanInput {
     ) -> ScanInputBuilder {
         ScanInputBuilder {
             input: ScanInput {
+                statistics_split: None,
                 exact_num_rows: None,
                 series_index: None,
                 ignore_range_index: false,

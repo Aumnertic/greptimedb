@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Optional exact-count preparation. All I/O is awaited in the caller's future,
-//! so cancellation drops outstanding reads and cannot leave a background scan.
+//! Optional exact-count preparation from manifest metadata.
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use common_telemetry::debug;
 use common_time::range::TimestampRange;
 use datafusion_expr::{Expr, Operator};
 use datatypes::data_type::DataType;
@@ -29,41 +24,20 @@ use store_api::storage::ScanRequest;
 use crate::read::scan_region::ScanInput;
 use crate::region::options::MergeMode;
 use crate::sst::file::FileHandle;
-use crate::sst::parquet::metadata::MetadataLoader;
-use crate::sst::parquet::reader::MetadataCacheMetrics;
 
-/// These conservative limits apply to one region scan. Remote regions prepare
-/// independently; the prototype does not claim a cluster-wide query I/O budget.
+/// Bound the work performed for each region scan.
 const MAX_FILES: usize = 64;
-const MAX_FOOTERS: usize = 8;
-const MAX_FOOTER_BYTES: u64 = 1024 * 1024;
-const PREPARE_TIMEOUT: Duration = Duration::from_millis(20);
 
-/// Proves the complete scan row count or returns unknown. Preparation timeout
-/// falls back; dropping the enclosing query future cancels preparation itself.
+/// Proves the complete scan row count or returns unknown.
 pub(crate) fn prepare<'a>(
     input: &'a ScanInput,
     request: &'a ScanRequest,
 ) -> BoxFuture<'a, Option<usize>> {
-    // Erase the optional preparation future at its boundary so the nested
-    // Parquet reader types do not inflate callers' ingest/heartbeat futures.
-    async move {
-        let files = candidates(input, request)?;
-        let result = tokio::time::timeout(PREPARE_TIMEOUT, count_files(input, &files)).await;
-        match result {
-            Ok(rows) => rows,
-            Err(_) => {
-                debug!("Metadata count preparation deadline exceeded");
-                None
-            }
-        }
-    }
-    .boxed()
+    async move { count_files(&candidates(input, request)?) }.boxed()
 }
 
-/// Checks all visibility conditions before any footer I/O. Only time-index
-/// comparisons combined with AND are allowed, and every selected file must be
-/// wholly covered. Inclusive file time ranges must be strictly disjoint.
+/// Only time-index comparisons combined with AND are allowed, and every
+/// selected file must be wholly covered. Inclusive time ranges must be disjoint.
 fn candidates<'a>(input: &'a ScanInput, request: &ScanRequest) -> Option<Vec<&'a FileHandle>> {
     if input.compaction
         || input.files.len() > MAX_FILES
@@ -150,59 +124,144 @@ fn time_filter(expr: &Expr, name: &str, data_type: &datatypes::arrow::datatypes:
     column.name == name && !value.is_null() && &value.data_type() == data_type
 }
 
-async fn count_files(input: &ScanInput, files: &[&FileHandle]) -> Option<usize> {
-    let mut total = 0usize;
-    let mut footer_reads = 0;
-    let mut bytes_left = MAX_FOOTER_BYTES;
-    for file in files {
-        let rows = if file.meta_ref().num_rows != 0 {
-            usize::try_from(file.meta_ref().num_rows).ok()?
-        } else if let Some(metadata) = input
-            .cache_strategy
-            .get_parquet_meta_data_from_mem_cache(file.file_id())
-        {
-            usize::try_from(metadata.file_metadata().num_rows()).ok()?
-        } else {
-            if footer_reads == MAX_FOOTERS || bytes_left < 8 {
-                return None;
-            }
-            footer_reads += 1;
-            let layer = &input.access_layer;
-            let path = file.file_path(layer.table_dir(), layer.path_type());
-            let mut loader = MetadataLoader::new(
-                layer.object_store().clone(),
-                &path,
-                file.meta_ref().file_size,
-            );
-            loader.with_read_budget(bytes_left);
-            let mut metrics = MetadataCacheMetrics::default();
-            let metadata = match loader.load(&mut metrics).await {
-                Ok(metadata) => Arc::new(metadata),
-                Err(error) => {
-                    debug!(error = %error, "Metadata count preparation unavailable; retaining scan");
-                    return None;
-                }
-            };
-            bytes_left = bytes_left.checked_sub(metrics.bytes_read)?;
-            let rows = usize::try_from(metadata.file_metadata().num_rows()).ok()?;
-            input
-                .cache_strategy
-                .put_parquet_meta_data(file.file_id(), metadata, None);
-            rows
-        };
-        total = total.checked_add(rows)?;
+fn count_files(files: &[&FileHandle]) -> Option<usize> {
+    files.iter().try_fold(0usize, |total, file| {
+        let rows = usize::try_from(file.meta_ref().num_rows)
+            .ok()
+            .filter(|&n| n > 0)?;
+        total.checked_add(rows)
+    })
+}
+
+/// Sources for two independently consumable scans of the same read view.
+#[derive(Clone)]
+pub(crate) struct StatisticsSplitPlan {
+    pub(crate) exact_files: Vec<FileHandle>,
+    pub(crate) remaining_files: Vec<FileHandle>,
+    pub(crate) exact_rows: usize,
+    pub(crate) remaining_rows: Option<usize>,
+}
+
+/// Classifies individual sources instead of rejecting a mixed region wholesale.
+pub(crate) fn statistics_split(
+    input: &ScanInput,
+    request: &ScanRequest,
+) -> Option<StatisticsSplitPlan> {
+    if input.compaction
+        || input.series_row_selector.is_some()
+        || input.sequence_range.is_some()
+        || request.limit.is_some()
+        || request.memtable_min_sequence.is_some()
+        || request.memtable_max_sequence.is_some()
+        || request.sst_min_sequence.is_some()
+        || request.snapshot_on_scan
+        || request.exact_sequence_range
+        || request.skip_sst_files
+        || (!input.append_mode && input.merge_mode != MergeMode::LastRow)
+    {
+        return None;
     }
-    debug!(
-        rows = total,
-        footer_reads,
-        footer_bytes = MAX_FOOTER_BYTES - bytes_left,
-        "Prepared exact metadata count"
-    );
-    Some(total)
+    #[cfg(feature = "enterprise")]
+    if !input.extension_ranges.is_empty() {
+        return None;
+    }
+    let range = input.time_range.as_ref()?;
+    let metadata = input.region_metadata();
+    let time_index = &metadata.time_index_column().column_schema;
+    let time_only = request.filters.iter().all(|expr| {
+        time_filter(
+            expr,
+            &time_index.name,
+            &time_index.data_type.as_arrow_type(),
+        )
+    });
+
+    // Mark whole connected overlap components. Looking only at neighbouring
+    // interval pairs misses a long file enclosing multiple shorter files.
+    let mut intervals = Vec::with_capacity(input.files.len());
+    for (index, file) in input.files.iter().enumerate() {
+        let (start, end) = file.time_range();
+        if start > end {
+            return None;
+        }
+        if range.intersects(&TimestampRange::new_inclusive(Some(start), Some(end))) {
+            intervals.push((start, end, index));
+        }
+    }
+    intervals.sort_unstable_by_key(|interval| interval.0);
+    let mut overlaps = vec![false; input.files.len()];
+    let mut begin = 0;
+    while begin < intervals.len() {
+        let mut end = begin + 1;
+        let mut max_time = intervals[begin].1;
+        while end < intervals.len() && intervals[end].0 <= max_time {
+            max_time = max_time.max(intervals[end].1);
+            end += 1;
+        }
+        if end - begin > 1 {
+            for interval in &intervals[begin..end] {
+                overlaps[interval.2] = true;
+            }
+        }
+        begin = end;
+    }
+    let memtable_stats: Vec<_> = input.memtables.iter().map(|m| m.stats()).collect();
+    let mut exact_files = Vec::new();
+    let mut remaining_files = Vec::new();
+    let mut exact_rows = 0usize;
+    for (index, file) in input.files.iter().enumerate() {
+        let (start, end) = file.time_range();
+        if !range.intersects(&TimestampRange::new_inclusive(Some(start), Some(end))) {
+            continue;
+        }
+        let isolated_from_memory = memtable_stats.iter().all(|stats| match stats.time_range {
+            Some((mem_start, mem_end)) => end < mem_start || mem_end < start,
+            None => stats.num_rows == 0,
+        });
+        let eligible = time_only
+            && range.contains(&start)
+            && range.contains(&end)
+            && file.num_rows() > 0
+            && (input.region_partition_expr.is_none() || input.should_skip_region_partition(file))
+            && (input.append_mode
+                || (file.meta_ref().num_rows_is_logical
+                    && !overlaps[index]
+                    && isolated_from_memory));
+        if eligible {
+            exact_rows = exact_rows.checked_add(usize::try_from(file.meta_ref().num_rows).ok()?)?;
+            exact_files.push(file.clone());
+        } else {
+            remaining_files.push(file.clone());
+        }
+    }
+    if exact_files.is_empty() && remaining_files.is_empty() && input.memtables.is_empty() {
+        return None;
+    }
+    let remaining_rows = remaining_files
+        .iter()
+        .try_fold(0usize, |rows, file| {
+            let count = usize::try_from(file.meta_ref().num_rows)
+                .ok()
+                .filter(|rows| *rows > 0)?;
+            rows.checked_add(count)
+        })
+        .and_then(|rows| {
+            memtable_stats
+                .iter()
+                .try_fold(rows, |rows, stats| rows.checked_add(stats.num_rows))
+        });
+    Some(StatisticsSplitPlan {
+        exact_files,
+        remaining_files,
+        exact_rows,
+        remaining_rows,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use common_time::Timestamp;
     use common_time::timestamp::TimeUnit;
     use datafusion_common::ScalarValue;
@@ -327,96 +386,43 @@ mod tests {
         assert_eq!(prepare(&input, &ScanRequest::default()).await, Some(0));
     }
     #[tokio::test]
-    async fn test_metadata_count_legacy_footer_cache_and_file_budget() {
-        use crate::cache::{CacheManager, CacheStrategy};
-        use crate::sst::parquet::PARQUET_METADATA_KEY;
-        use datatypes::arrow::array::{ArrayRef, Int64Array};
-        use datatypes::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-        use datatypes::arrow::record_batch::RecordBatch;
-        use parquet::arrow::ArrowWriter;
-        use parquet::file::metadata::KeyValue;
-        use parquet::file::properties::WriterProperties;
-        use store_api::storage::FileId;
-
-        let env = SchedulerEnv::new().await;
-        let metadata = Arc::new(metadata_with_primary_key(vec![0, 1], false));
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            ArrowDataType::Int64,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef],
-        )
-        .unwrap();
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(vec![KeyValue::new(
-                PARQUET_METADATA_KEY.to_string(),
-                metadata.to_json().unwrap(),
-            )]))
-            .build();
-        let mut bytes = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let file_size = bytes.len() as u64;
-        let mut files = Vec::new();
-        for i in 0..=MAX_FOOTERS {
-            let file = FileHandle::new(
-                FileMeta {
-                    file_id: FileId::random(),
-                    num_rows: 0, // Legacy manifest: the footer is authoritative.
-                    file_size,
-                    time_range: (
-                        Timestamp::new_millisecond(i as i64),
-                        Timestamp::new_millisecond(i as i64),
-                    ),
-                    ..Default::default()
-                },
-                new_noop_file_purger(),
-            );
-            let path = file.file_path(env.access_layer.table_dir(), env.access_layer.path_type());
-            env.access_layer
-                .object_store()
-                .write(&path, bytes.clone())
-                .await
-                .unwrap();
-            files.push(file);
+    async fn test_metadata_count_unknown_manifest_count_falls_back() {
+        let mut input = input(vec![file(0, 10, 0, true)], &[]).await;
+        assert_eq!(prepare(&input, &ScanRequest::default()).await, None);
+        input.append_mode = true;
+        assert_eq!(prepare(&input, &ScanRequest::default()).await, None);
+    }
+    #[tokio::test]
+    async fn test_metadata_count_statistics_split_sources() {
+        for (files, exact_rows, remaining, estimate) in [
+            (
+                vec![file(0, 10, 3, true), file(20, 30, 2, false)],
+                3,
+                1,
+                Some(2),
+            ),
+            (
+                vec![
+                    file(0, 100, 3, true),
+                    file(5, 8, 2, false),
+                    file(20, 30, 4, true),
+                ],
+                0,
+                3,
+                Some(9),
+            ),
+            (
+                vec![file(0, 10, 3, true), file(20, 30, 0, false)],
+                3,
+                1,
+                None,
+            ),
+        ] {
+            let input = input(files, &[]).await;
+            let split = statistics_split(&input, &ScanRequest::default()).unwrap();
+            assert_eq!(split.exact_rows, exact_rows);
+            assert_eq!(split.remaining_files.len(), remaining);
+            assert_eq!(split.remaining_rows, estimate);
         }
-        let mapper = FlatProjectionMapper::new(&metadata, [0, 2, 3]).unwrap();
-        let mut input = ScanInput::builder(env.access_layer.clone(), mapper)
-            .with_append_mode(true)
-            .with_files(files)
-            .with_time_range(Some(TimestampRange::min_to_max()))
-            .build();
-        // Nine uncached footers exceed the eight-file budget.
-        let selected = candidates(&input, &ScanRequest::default()).unwrap();
-        assert_eq!(count_files(&input, &selected).await, None);
-        input.files.truncate(1);
-        input.cache_strategy = CacheStrategy::EnableAll(Arc::new(
-            CacheManager::builder()
-                .sst_meta_cache_size(1024 * 1024)
-                .build(),
-        ));
-        let selected = candidates(&input, &ScanRequest::default()).unwrap();
-        assert_eq!(count_files(&input, &selected).await, Some(3));
-        let file = &input.files[0];
-        assert!(
-            input
-                .cache_strategy
-                .get_parquet_meta_data_from_mem_cache(file.file_id())
-                .is_some()
-        );
-        let path = file.file_path(env.access_layer.table_dir(), env.access_layer.path_type());
-        env.access_layer.object_store().delete(&path).await.unwrap();
-        assert_eq!(
-            count_files(&input, &selected).await,
-            Some(3),
-            "cached footer must avoid I/O"
-        );
-        // The same legacy footer cannot certify non-append deduplication.
-        input.append_mode = false;
-        assert!(candidates(&input, &ScanRequest::default()).is_none());
     }
 }
