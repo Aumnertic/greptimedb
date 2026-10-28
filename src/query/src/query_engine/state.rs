@@ -278,6 +278,14 @@ impl QueryEngineState {
         );
         physical_optimizer.rules.push(Arc::new(SanityCheckPlan {}));
 
+        // Split COUNT states before the standard aggregate-statistics rule.
+        physical_optimizer.rules.insert(
+            1,
+            Arc::new(table::table::scan::PartialCountRule::with_count_state(
+                common_function::aggrs::aggr_wrapper::aggr_state_func_name("count"),
+            )),
+        );
+
         let session_state = SessionStateBuilder::new()
             .with_config(session_config)
             .with_runtime_env(runtime_env)

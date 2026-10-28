@@ -222,10 +222,9 @@ pub struct MitoConfig {
     /// Whether to enable the experimental two-phase mode for eligible metric series scans.
     pub experimental_series_scan_v2: bool,
 
-    /// Enables bounded metadata preparation for eligible scalar COUNT scans.
-    /// Each region scan examines at most 64 SSTs and fetches at most 8 footers,
-    /// with a 1 MiB total footer-read budget and a 20 ms preparation deadline.
-    /// Other queries and writes do not perform additional statistics I/O.
+    /// Enables separate exact/inexact source statistics and eligible metadata COUNTs.
+    /// Query-local scans classify manifest evidence without reading SST metadata.
+    /// Ingestion does not perform additional statistics I/O.
     pub experimental_metadata_count: bool,
 
     pub gc: GcConfig,
