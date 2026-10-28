@@ -21,6 +21,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use store_api::storage::ScanRequest;
 
+use crate::compaction::run::files_overlap_inclusive;
 use crate::read::scan_region::ScanInput;
 use crate::region::options::MergeMode;
 use crate::sst::file::FileHandle;
@@ -37,7 +38,8 @@ pub(crate) fn prepare<'a>(
 }
 
 /// Only time-index comparisons combined with AND are allowed, and every
-/// selected file must be wholly covered. Inclusive time ranges must be disjoint.
+/// selected file must be wholly covered. File sources must be disjoint in
+/// their combined inclusive time and primary key ranges.
 fn candidates<'a>(input: &'a ScanInput, request: &ScanRequest) -> Option<Vec<&'a FileHandle>> {
     if input.compaction
         || input.files.len() > MAX_FILES
@@ -92,11 +94,20 @@ fn candidates<'a>(input: &'a ScanInput, request: &ScanRequest) -> Option<Vec<&'a
     }
     if !input.append_mode {
         files.sort_unstable_by_key(|file| file.time_range().0);
-        if files
-            .windows(2)
-            .any(|pair| pair[0].time_range().1 >= pair[1].time_range().0)
-        {
-            return None;
+        let mapper = input.primary_key_mapper();
+        for (index, file) in files.iter().enumerate() {
+            let end = file.time_range().1;
+            if files[index + 1..]
+                .iter()
+                .take_while(|other| other.time_range().0 <= end)
+                .any(|other| {
+                    file.raw_primary_key_range().is_none()
+                        || other.raw_primary_key_range().is_none()
+                        || files_overlap_inclusive(file, other, mapper)
+                })
+            {
+                return None;
+            }
         }
     }
     Some(files)
@@ -176,8 +187,8 @@ pub(crate) fn statistics_split(
         )
     });
 
-    // Mark whole connected overlap components. Looking only at neighbouring
-    // interval pairs misses a long file enclosing multiple shorter files.
+    // Check every temporally intersecting pair. Compaction outputs with disjoint
+    // primary key ranges remain independent even when their time ranges overlap.
     let mut intervals = Vec::with_capacity(input.files.len());
     for (index, file) in input.files.iter().enumerate() {
         let (start, end) = file.time_range();
@@ -190,20 +201,22 @@ pub(crate) fn statistics_split(
     }
     intervals.sort_unstable_by_key(|interval| interval.0);
     let mut overlaps = vec![false; input.files.len()];
-    let mut begin = 0;
-    while begin < intervals.len() {
-        let mut end = begin + 1;
-        let mut max_time = intervals[begin].1;
-        while end < intervals.len() && intervals[end].0 <= max_time {
-            max_time = max_time.max(intervals[end].1);
-            end += 1;
-        }
-        if end - begin > 1 {
-            for interval in &intervals[begin..end] {
-                overlaps[interval.2] = true;
+    let mapper = input.primary_key_mapper();
+    for (position, &(_, end, index)) in intervals.iter().enumerate() {
+        for &(_, _, other_index) in intervals[position + 1..]
+            .iter()
+            .take_while(|interval| interval.0 <= end)
+        {
+            let file = &input.files[index];
+            let other = &input.files[other_index];
+            if file.raw_primary_key_range().is_none()
+                || other.raw_primary_key_range().is_none()
+                || files_overlap_inclusive(file, other, mapper)
+            {
+                overlaps[index] = true;
+                overlaps[other_index] = true;
             }
         }
-        begin = end;
     }
     let memtable_stats: Vec<_> = input.memtables.iter().map(|m| m.stats()).collect();
     let mut exact_files = Vec::new();
