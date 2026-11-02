@@ -271,7 +271,6 @@ pub(crate) fn statistics_split(
         || request.snapshot_on_scan
         || request.exact_sequence_range
         || request.skip_sst_files
-        || (!input.append_mode && input.merge_mode != MergeMode::LastRow)
     {
         return None;
     }
