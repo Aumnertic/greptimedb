@@ -27,7 +27,6 @@ use futures::future::BoxFuture;
 use store_api::storage::ScanRequest;
 
 use crate::read::scan_region::ScanInput;
-use crate::region::options::MergeMode;
 use crate::sst::file::FileHandle;
 use crate::sst::parquet::metadata::MetadataLoader;
 use crate::sst::parquet::reader::MetadataCacheMetrics;
@@ -77,7 +76,6 @@ fn candidates<'a>(input: &'a ScanInput, request: &ScanRequest) -> Option<Vec<&'a
         || request.snapshot_on_scan
         || request.exact_sequence_range
         || request.skip_sst_files
-        || (!input.append_mode && input.merge_mode != MergeMode::LastRow)
     {
         return None;
     }

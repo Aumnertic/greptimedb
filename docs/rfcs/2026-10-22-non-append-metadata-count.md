@@ -48,7 +48,8 @@ nothing about query predicates, sequence visibility or other sources.
 
 The field defaults to false and is omitted from serialization when false.
 The prototype sets it only for newly rewritten non-append compaction outputs
-using `last_row` with deletion filtering enabled. Their existing `num_rows`
+with deletion filtering enabled, under either `last_row` or `last_non_null`
+(both keep one row per primary key and timestamp). Their existing `num_rows`
 count is sufficient; no additional pass over records is needed. Flush outputs
 remain uncertified. Future work may certify more write paths if their input
 invariants can be proved without meaningful ingestion overhead.
@@ -71,7 +72,7 @@ The Mito engine checks the same pinned input used by normal execution:
 
 1. No relevant memtable ranges or enterprise extension ranges.
 2. No sequence-range intent, explicit sequence fences, source-skipping intent,
-   row selector or scan limit. Non-append scans use `last_row`.
+   row selector or scan limit. Non-append scans may use either dedup merge mode.
 3. Predicates consist only of same-type time-index/literal comparisons joined
    by AND. Each file is completely excluded or completely included. Partial
    coverage, OR, NOT, field/tag predicates and casts fall back.
