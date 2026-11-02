@@ -446,7 +446,10 @@ impl ScanRegion {
     #[tracing::instrument(skip_all, fields(region_id = %self.region_id()))]
     pub(crate) async fn unordered_scan(self) -> Result<UnorderedScan> {
         let input = self.scan_input().await?;
-        Ok(UnorderedScan::new(input))
+        let query_start = input.query_start.unwrap_or_else(Instant::now);
+        let ranges = RangeMeta::unordered_scan_ranges(&input).await;
+        let stream_ctx = StreamContext::unordered_scan_ctx(input, ranges, query_start);
+        Ok(UnorderedScan::new(stream_ctx))
     }
 
     /// Scans by series.
@@ -993,6 +996,9 @@ pub struct ScanInput {
     pub(crate) sequence_range: Option<SequenceRange>,
     /// Whether this scan is for compaction.
     pub(crate) compaction: bool,
+    /// Max number of compaction inputs decoded concurrently ahead of the merge.
+    /// Values below 2 decode inputs on the merging task.
+    pub(crate) compaction_read_parallelism: usize,
     /// Compaction-only JSON2 physical rewrite targets.
     json2_rewrite_targets: Json2RewriteTargets,
     /// Counters that should receive query-load metrics.
@@ -1060,6 +1066,7 @@ impl ScanInput {
             snapshot_sequence: self.snapshot_sequence,
             sequence_range: self.sequence_range,
             compaction: self.compaction,
+            compaction_read_parallelism: self.compaction_read_parallelism,
             json2_rewrite_targets: self.json2_rewrite_targets.clone(),
             query_stat_counters: self.query_stat_counters.clone(),
             #[cfg(feature = "enterprise")]
@@ -1107,6 +1114,7 @@ impl ScanInput {
                 snapshot_sequence: None,
                 sequence_range: None,
                 compaction: false,
+                compaction_read_parallelism: 1,
                 json2_rewrite_targets: Arc::default(),
                 query_stat_counters: None,
                 #[cfg(feature = "enterprise")]
@@ -1461,6 +1469,13 @@ impl ScanInputBuilder {
     #[must_use]
     pub(crate) fn with_compaction(mut self, compaction: bool) -> Self {
         self.input.compaction = compaction;
+        self
+    }
+
+    /// Sets the max number of compaction inputs decoded concurrently.
+    #[must_use]
+    pub(crate) fn with_compaction_read_parallelism(mut self, parallelism: usize) -> Self {
+        self.input.compaction_read_parallelism = parallelism;
         self
     }
 
@@ -2101,9 +2116,11 @@ impl StreamContext {
     }
 
     /// Creates a new [StreamContext] for [UnorderedScan].
-    pub(crate) fn unordered_scan_ctx(input: ScanInput) -> Self {
-        let query_start = input.query_start.unwrap_or_else(Instant::now);
-        let ranges = RangeMeta::unordered_scan_ranges(&input);
+    pub(crate) fn unordered_scan_ctx(
+        input: ScanInput,
+        ranges: Vec<RangeMeta>,
+        query_start: Instant,
+    ) -> Self {
         READ_SST_COUNT.observe(input.num_files() as f64);
         Self {
             input,
