@@ -435,18 +435,19 @@ async fn test_metadata_count_fourteen_day_workload() {
             );
         }
         if expected_count == 14_000 {
-            let paths = reads.lock().unwrap();
-            assert!(
-                !paths.is_empty(),
-                "remaining files must actually be scanned"
-            );
-            assert!(
-                paths
-                    .iter()
-                    .all(|path| historical_files.iter().all(|id| !path.contains(id))),
-                "exact files were read: {paths:?}"
-            );
-            drop(paths);
+            {
+                let paths = reads.lock().unwrap();
+                assert!(
+                    !paths.is_empty(),
+                    "remaining files must actually be scanned"
+                );
+                assert!(
+                    paths
+                        .iter()
+                        .all(|path| historical_files.iter().all(|id| !path.contains(id))),
+                    "exact files were read: {paths:?}"
+                );
+            }
             let raw = ctx
                 .sql("SELECT * FROM t")
                 .await
