@@ -655,9 +655,6 @@ impl RegionScanner for SeqScan {
     }
 
     fn set_logical_region(&mut self, logical_region: bool) {
-        if logical_region {
-            self.statistics_split = None;
-        }
         self.properties.set_logical_region(logical_region);
     }
 
