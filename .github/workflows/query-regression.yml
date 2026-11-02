@@ -797,7 +797,6 @@ jobs:
           if [[ -z "${HELPERS_IMAGE}" ]]; then
             cargo build --profile "${CARGO_PROFILE}" -p cmd --bin query_perf_fixture --features dev-tools
             cargo build --profile "${CARGO_PROFILE}" -p cmd --bin query_regression_runner --features dev-tools
-            cargo build --profile "${CARGO_PROFILE}" -p cmd --bin analyze_metadata_count_eligibility --features dev-tools
           fi
           candidate_build_elapsed="${SECONDS}"
           printf 'Candidate greptime and query regression helper cargo builds elapsed: %s seconds\n' "${candidate_build_elapsed}"
@@ -817,9 +816,23 @@ jobs:
               "${GITHUB_WORKSPACE}/query-regression-bins/candidate/query_perf_fixture"
             cp "${CARGO_TARGET_DIR}/${target_dir}/query_regression_runner" \
               "${GITHUB_WORKSPACE}/query-regression-bins/candidate/query_regression_runner"
-            cp "${CARGO_TARGET_DIR}/${target_dir}/analyze_metadata_count_eligibility" \
-              "${GITHUB_WORKSPACE}/query-regression-bins/candidate/analyze_metadata_count_eligibility"
           fi
+
+      - name: Build metadata count analyzer
+        # The helpers image does not ship this analyzer, so it is only built
+        # (and its analysis step only runs) when helpers come from source.
+        if: ${{ inputs.helpers_image == '' }}
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cargo build --profile "${CARGO_PROFILE}" -p cmd --bin analyze_metadata_count_eligibility --features dev-tools
+          target_dir="${CARGO_PROFILE}"
+          if [[ "${CARGO_PROFILE}" == "dev" ]]; then
+            target_dir="debug"
+          fi
+          mkdir -p "${GITHUB_WORKSPACE}/query-regression-bins/candidate"
+          cp "${CARGO_TARGET_DIR}/${target_dir}/analyze_metadata_count_eligibility" \
+            "${GITHUB_WORKSPACE}/query-regression-bins/candidate/analyze_metadata_count_eligibility"
 
       - name: Run query regression
         id: run

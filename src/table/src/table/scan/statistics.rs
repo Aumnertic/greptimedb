@@ -39,7 +39,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use store_api::region_engine::RegionScannerRef;
 use store_api::storage::ScanRequest;
 
-use super::RegionScanExec;
+use crate::table::scan::RegionScanExec;
 
 macro_rules! statistics_scan {
     ($name:ident, $exact:literal) => {
