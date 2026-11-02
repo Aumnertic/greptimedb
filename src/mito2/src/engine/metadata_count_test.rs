@@ -91,6 +91,17 @@ fn count_context() -> SessionContext {
 
 #[tokio::test]
 async fn test_metadata_count_compaction_sql_and_fallback() {
+    run_compaction_sql_and_fallback("last_row").await;
+}
+
+/// Both dedup merge modes keep one row per primary key and timestamp, so
+/// compaction outputs certify logical rows regardless of field merging.
+#[tokio::test]
+async fn test_metadata_count_compaction_sql_and_fallback_last_non_null() {
+    run_compaction_sql_and_fallback("last_non_null").await;
+}
+
+async fn run_compaction_sql_and_fallback(merge_mode: &str) {
     let reads = Arc::new(AtomicUsize::new(0));
     let observed = reads.clone();
     let layer = MockLayerBuilder::default()
@@ -122,6 +133,7 @@ async fn test_metadata_count_compaction_sql_and_fallback() {
         )
         .await;
     let create = CreateRequestBuilder::new()
+        .insert_option("merge_mode", merge_mode)
         .insert_option("compaction.type", "twcs")
         .insert_option("compaction.twcs.trigger_file_num", "2")
         .build();

@@ -23,7 +23,6 @@ use store_api::storage::ScanRequest;
 
 use crate::compaction::run::files_overlap_inclusive;
 use crate::read::scan_region::ScanInput;
-use crate::region::options::MergeMode;
 use crate::sst::file::FileHandle;
 
 /// Bound the work performed for each region scan.
@@ -53,7 +52,6 @@ fn candidates<'a>(input: &'a ScanInput, request: &ScanRequest) -> Option<Vec<&'a
         || request.snapshot_on_scan
         || request.exact_sequence_range
         || request.skip_sst_files
-        || (!input.append_mode && input.merge_mode != MergeMode::LastRow)
     {
         return None;
     }
@@ -168,7 +166,6 @@ pub(crate) fn statistics_split(
         || request.snapshot_on_scan
         || request.exact_sequence_range
         || request.skip_sst_files
-        || (!input.append_mode && input.merge_mode != MergeMode::LastRow)
     {
         return None;
     }
