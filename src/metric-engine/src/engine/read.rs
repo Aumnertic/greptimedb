@@ -323,7 +323,8 @@ mod test {
     use super::*;
     use crate::config::EngineConfig;
     use crate::test_util::{
-        self, TestEnv, alter_logical_region_add_tag_columns, create_logical_region_request,
+        self, TestEnv, alter_logical_region_add_tag_columns, build_rows,
+        create_logical_region_request, row_schema_with_tags,
     };
 
     struct ScannerDisplay<'a>(&'a dyn store_api::region_engine::RegionScanner);
@@ -550,6 +551,99 @@ mod test {
 
         let explain = ScannerDisplay(scanner.as_ref()).to_string();
         assert!(explain.contains("\"mode\":\"two_phase\""), "{explain}");
+    }
+
+    /// Writes the same rows to every logical region in four flushes, then
+    /// compacts the data region so its output certifies logical row counts.
+    async fn logical_count_env(prefix: &str, logical_regions: &[RegionId]) -> TestEnv {
+        let env = TestEnv::with_mito_config(
+            prefix,
+            MitoConfig {
+                experimental_metadata_count: true,
+                ..Default::default()
+            },
+            EngineConfig::default(),
+        )
+        .await;
+        let physical_region_id = env.default_physical_region_id();
+        env.create_physical_region(
+            physical_region_id,
+            &TestEnv::default_table_dir(),
+            vec![
+                ("compaction.type".to_string(), "twcs".to_string()),
+                (
+                    "compaction.twcs.trigger_file_num".to_string(),
+                    "2".to_string(),
+                ),
+            ],
+        )
+        .await;
+        for region_id in logical_regions {
+            env.create_logical_region(physical_region_id, *region_id)
+                .await;
+        }
+        for _ in 0..4 {
+            for region_id in logical_regions {
+                let request = RegionRequest::Put(RegionPutRequest {
+                    skip_wal: false,
+                    rows: Rows {
+                        schema: row_schema_with_tags(&["job"]),
+                        rows: build_rows(1, 10),
+                    },
+                    hint: None,
+                    partition_expr_version: None,
+                });
+                env.metric()
+                    .handle_request(*region_id, request)
+                    .await
+                    .unwrap();
+            }
+            env.metric()
+                .handle_request(
+                    physical_region_id,
+                    RegionRequest::Flush(RegionFlushRequest::default()),
+                )
+                .await
+                .unwrap();
+        }
+        env.mito()
+            .handle_request(
+                utils::to_data_region_id(physical_region_id),
+                RegionRequest::Compact(Default::default()),
+            )
+            .await
+            .unwrap();
+        env
+    }
+
+    async fn logical_exact_count(env: &TestEnv, region_id: RegionId) -> Option<usize> {
+        env.metric()
+            .handle_query(
+                region_id,
+                ScanRequest {
+                    metadata_count_hint: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .properties()
+            .exact_num_rows()
+    }
+
+    #[tokio::test]
+    async fn test_metadata_count_absorbs_logical_table_id_filter() {
+        let logical = RegionId::new(3, 2);
+        let env = logical_count_env("test_metadata_count_logical", &[logical]).await;
+        assert_eq!(logical_exact_count(&env, logical).await, Some(10));
+
+        // Shared files span both table ids, so the added filter is not redundant.
+        let env = logical_count_env(
+            "test_metadata_count_shared",
+            &[logical, RegionId::new(4, 2)],
+        )
+        .await;
+        assert_eq!(logical_exact_count(&env, logical).await, None);
     }
 
     #[tokio::test]

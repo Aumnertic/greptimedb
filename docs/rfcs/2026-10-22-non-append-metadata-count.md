@@ -73,9 +73,13 @@ The Mito engine checks the same pinned input used by normal execution:
 1. No relevant memtable ranges or enterprise extension ranges.
 2. No sequence-range intent, explicit sequence fences, source-skipping intent,
    row selector or scan limit. Non-append scans may use either dedup merge mode.
-3. Predicates consist only of same-type time-index/literal comparisons joined
-   by AND. Each file is completely excluded or completely included. Partial
-   coverage, OR, NOT, field/tag predicates and casts fall back.
+3. Predicates consist only of same-type time-index/literal comparisons and
+   leftmost-primary-key/literal equalities joined by AND. Each file is
+   completely excluded or completely included by time. A leftmost equality is
+   absorbed only for files whose primary key bounds both decode to that value,
+   which proves it for every row (sparse keys start with the metric engine
+   `__table_id`). Partial coverage, OR, NOT, other field/tag predicates and
+   casts fall back.
 4. Region partition filtering is absent or proven redundant for every selected
    file using the existing partition-expression check.
 5. Each selected non-append SST has the file capability, and their inclusive
@@ -84,7 +88,8 @@ The Mito engine checks the same pinned input used by normal execution:
 
 The scanner publishes `exact_num_rows: Option<usize>` for the complete static
 scan. This is separate from the existing physical-source count. Dynamic-filter
-attachment and logical-region wrapping invalidate the prepared count.
+attachment invalidates the prepared count. Logical-region wrapping keeps it,
+because the table-id filter is part of the proven static predicates.
 
 `RegionScanExec` exposes exact row counts and only schema-guaranteed zero null
 counts. It does not infer distinct counts or nullable-column null counts.
