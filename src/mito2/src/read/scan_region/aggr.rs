@@ -441,6 +441,7 @@ mod tests {
         }
         FileHandle::new(
             FileMeta {
+                region_id: RegionId::new(123, 456),
                 file_id,
                 num_rows: rows,
                 time_range: (
